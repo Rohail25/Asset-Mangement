@@ -12,18 +12,22 @@ use App\Models\Client;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Validation\Rule;
+use App\Models\AssetRegister;
+use App\Models\AssetRegisterRow;
+use Illuminate\Support\Str;
+
 
 class AssetAuditController extends Controller
 {
     // Show schema builder UI
     public function schema(Client $client)
     {
-        if (!Auth::guard('web')->check()) {
+        if (Auth::guard('web')->check()) {
             $fields = AssetAuditField::where('client_id', $client->id)
                 ->orderBy('order_index')
                 ->get();
         } else {
-            $fields = AssetAuditField::where('client_id', $client->id)->where('audit_id', Auth::guard('auditor')->id())
+            $fields = AssetAuditField::where('client_id', $client->id)->where('auditor_id', Auth::guard('auditor')->id())
                 ->orderBy('order_index')
                 ->with('options')
                 ->get();
@@ -117,7 +121,7 @@ class AssetAuditController extends Controller
             // we need fields order to map CSV columns (after the first header line)
             $fields = AssetAuditField::where('client_id', $client->id)->orderBy('order_index')->get();
         }
-       
+
 
         return view('admin.pages.asset_audit.uploads', compact('client', 'files', 'auditors', 'fields'));
     }
@@ -126,24 +130,86 @@ class AssetAuditController extends Controller
     public function uploadStore(Request $request, Client $client)
     {
         $request->validate([
-            'file'       => ['required', 'file', 'mimes:csv,txt', 'max:20480'],
+            'file' => ['required', 'file', 'mimes:csv,txt', 'max:20480'],
+            // OPTIONAL: let the UI post a specific register_id if you don’t want “latest”
+            // 'register_id' => ['nullable','exists:asset_registers,id'],
         ]);
 
-        // require schema
-        $fields = AssetAuditField::where('client_id', $client->id)->orderBy('order_index')->get();
-        if ($fields->isEmpty()) {
-            return back()->withErrors('Define audit fields before uploading.');
+        // 1) Load the headings set to validate against (latest by default)
+        $register = AssetRegister::where('client_id', $client->id)
+            ->orderByDesc('created_at')
+            ->first();
+
+        if (!$register) {
+            return back()->withErrors('No Asset Register headings found for this client. Upload headings first.');
         }
 
-        $file      = $request->file('file');
-        $original  = $file->getClientOriginalName();
-        $stream    = fopen($file->getRealPath(), 'r');
+        $savedHeadings = is_array($register->headings)
+            ? $register->headings
+            : json_decode($register->headings, true);
+
+        if (empty($savedHeadings) || !is_array($savedHeadings)) {
+            return back()->withErrors('Saved register headings are invalid for this client.');
+        }
+
+        // 2) Require an audit schema and prepare a label->fieldName map
+        $fields = AssetAuditField::where('client_id', $client->id)
+            ->orderBy('order_index')
+            ->get(['name', 'label']);
+
+        if ($fields->isEmpty()) {
+            return back()->withErrors('Define Audit Schema (fields) before uploading Audit CSV.');
+        }
+
+        // Map normalized label -> schema key (field name)
+        $norm = fn($v) => strtoupper(trim((string)$v));
+        $labelToKey = [];
+        foreach ($fields as $f) {
+            $labelToKey[$norm($f->label)] = $f->name;
+        }
+
+        // 3) Open file & read header
+        $file     = $request->file('file');
+        $original = $file->getClientOriginalName();
+        $stream   = fopen($file->getRealPath(), 'r');
         if ($stream === false) return back()->withErrors('Could not read uploaded file.');
 
-        // Read & ignore first line (headers)
-        $this->skipCsvHeader($stream);
+        // Read first row (header) as-is
+        $csvHeader = $this->readCsvFirstRow($stream); // use your helper
+        if (empty($csvHeader)) {
+            fclose($stream);
+            return back()->withErrors('CSV appears empty or has no header row.');
+        }
 
-        // Prepare a file record
+        // 4) Validate header: same length & same headings (order must match)
+        $savedNorm = array_map($norm, $savedHeadings);
+        $currNorm  = array_map($norm, $csvHeader);
+
+        if (count($savedNorm) !== count($currNorm)) {
+            fclose($stream);
+            return back()->withErrors('CSV header column count does not match saved Asset Register headings for this client.');
+        }
+
+        for ($i = 0; $i < count($savedNorm); $i++) {
+            if ($savedNorm[$i] !== $currNorm[$i]) {
+                fclose($stream);
+                return back()->withErrors("CSV header mismatch at column " . ($i + 1) . ": expected '{$savedHeadings[$i]}', found '{$csvHeader[$i]}'.");
+            }
+        }
+
+        // 5) Ensure every heading label maps to a schema field key
+        //    (This requires that your schema labels match register headings; if not, use the "Import to Schema" shortcut.)
+        $headerFieldKeys = [];
+        foreach ($csvHeader as $label) {
+            $key = $labelToKey[$norm($label)] ?? null;
+            // if (!$key) {
+            //     fclose($stream);
+            //     return back()->withErrors("Audit Schema is missing a field with label '{$label}'. Create it (or use Import to Schema) and retry.");
+            // }
+            $headerFieldKeys[] = $key; // schema key in same order as CSV columns
+        }
+
+        // 6) Prepare audit file record
         $fileRec = AssetAuditFile::create([
             'client_id'       => $client->id,
             'auditor_id'      => Auth::guard('auditor')->id(),
@@ -153,28 +219,34 @@ class AssetAuditController extends Controller
             'rows_count'      => 0,
         ]);
 
-        $names = $fields->pluck('name')->values()->toArray();
-
+        // 7) Read data rows (ignore the first line we already consumed)
         $rowsImported = 0;
         while (($row = fgetcsv($stream, 0, ',')) !== false) {
-            // empty line protection
-            if (count(array_filter($row, fn($v) => trim((string)$v) !== '')) === 0) continue;
 
-            // If delimiter issue, try ;
+            // Detect and recover if the whole row is a single semicolon-joined cell
             if (count($row) === 1 && str_contains($row[0] ?? '', ';')) {
                 $row = str_getcsv($row[0], ';');
             }
 
-            // Map by order
+            // Skip empty lines
+            if (count(array_filter($row, fn($v) => trim((string)$v) !== '')) === 0) continue;
+
+            // Column count mismatch (bad line) — skip row safely
+            if (count($row) < count($headerFieldKeys)) {
+                // Optionally collect a warning; for now just skip
+                continue;
+            }
+
+            // Map values by header -> schema key
             $payload = [];
-            foreach ($names as $i => $key) {
-                $payload[$key] = isset($row[$i]) ? trim((string)$row[$i]) : null;
+            foreach ($headerFieldKeys as $i => $schemaKey) {
+                $payload[$schemaKey] = isset($row[$i]) ? trim((string)$row[$i]) : null;
             }
 
             AssetAuditRow::create([
                 'client_id'  => $client->id,
                 'file_id'    => $fileRec->id,
-                'auditor_id' => $request->auditor_id,
+                'auditor_id' => Auth::guard('auditor')->id(),
                 'data'       => $payload,
             ]);
             $rowsImported++;
@@ -183,7 +255,7 @@ class AssetAuditController extends Controller
 
         $fileRec->update(['rows_count' => $rowsImported]);
 
-        return back()->with('ok', "Uploaded $original — $rowsImported rows appended.");
+        return back()->with('ok', "Uploaded {$original} — {$rowsImported} rows appended (header matched saved register headings).");
     }
 
     // Delete an uploaded file (and its rows)
@@ -289,4 +361,21 @@ class AssetAuditController extends Controller
         // This endpoint exists to conceptually “close” the day; practically we just allow a new file on next save
         return back()->with('ok', 'Day finished. A new manual day file will start on the next save.');
     }
+
+     private function readCsvFirstRow($stream): array
+    {
+        // Skip BOM
+        $bom = fread($stream, 3);
+        if ($bom !== "\xEF\xBB\xBF") rewind($stream);
+
+        $row = fgetcsv($stream, 0, ',');
+        if (is_array($row) && count($row) === 1 && str_contains($row[0] ?? '', ';')) {
+            rewind($stream);
+            $bom = fread($stream, 3);
+            if ($bom !== "\xEF\xBB\xBF") rewind($stream);
+            $row = fgetcsv($stream, 0, ';');
+        }
+        return is_array($row) ? $row : [];
+    }
+
 }

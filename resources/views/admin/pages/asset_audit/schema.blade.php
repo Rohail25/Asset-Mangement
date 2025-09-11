@@ -1,20 +1,32 @@
 @extends('admin.dashboard')
 @section('title', 'Audit Schema')
 
+{{-- check user role  --}}
+@php
+    $isAdmin = auth('web')->check();
+    $isAuditor = auth('auditor')->check();
+    $ns = $isAdmin ? 'admin.' : 'auditor.';
+@endphp
+
 @section('content')
-    <h4 class="mb-3">Audit Schema — {{ $client->company_name }}</h4>
-    {{-- check user role  --}}
-    @php
-        $isAdmin = auth('web')->check();
-        $isAuditor = auth('auditor')->check();
-        $ns = $isAdmin ? 'admin.' : 'auditor.';
-    @endphp
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h4 class="mb-3">
+            <i class="bi bi-filetype-csv me-2"></i>
+            Audit Schema — {{ $client->company_name }}
+        </h4>
+        <a href="{{ route($ns . 'client.index', $client->id) }}" class="btn btn-outline-secondary btn-sm">
+            <i class="bi bi-arrow-left-short me-1"></i> Back
+        </a>
+    </div>
+
+
+
     <div class="row g-3">
         <div class="col-lg-5">
             <div class="card">
                 <div class="card-header bg-white"><strong>Add Field</strong></div>
                 <div class="card-body">
-                    <form class="row g-2" method="POST" action="{{ route($ns.'audit.field.store', $client->id) }}">
+                    <form class="row g-2" method="POST" action="{{ route($ns . 'audit.field.store', $client->id) }}">
                         @csrf
                         <div class="col-md-6">
                             <label class="form-label">Key (no spaces)</label>
@@ -97,7 +109,7 @@
                                                         <span class="badge text-bg-secondary">
                                                             {{ $o->value }}
                                                             <form class="d-inline" method="POST"
-                                                                action="{{ route($ns.'audit.option.destroy', [$client->id, $f->id, $o->id]) }}">
+                                                                action="{{ route($ns . 'audit.option.destroy', [$client->id, $f->id, $o->id]) }}">
                                                                 @csrf @method('DELETE')
                                                                 <button class="btn btn-link btn-sm text-white p-0 ms-1"
                                                                     onclick="return confirm('Delete option?')">×</button>
@@ -106,7 +118,7 @@
                                                     @endforeach
                                                 </div>
                                                 <form class="d-flex gap-2" method="POST"
-                                                    action="{{ route($ns.'audit.option.store', [$client->id, $f->id]) }}">
+                                                    action="{{ route($ns . 'audit.option.store', [$client->id, $f->id]) }}">
                                                     @csrf
                                                     <input class="form-control form-control-sm" name="value"
                                                         placeholder="ADD OPTION" required>
@@ -118,7 +130,7 @@
                                         </td>
                                         <td class="text-end">
                                             <form method="POST"
-                                                action="{{ route($ns.'audit.field.destroy', [$client->id, $f->id]) }}">
+                                                action="{{ route($ns . 'audit.field.destroy', [$client->id, $f->id]) }}">
                                                 @csrf @method('DELETE')
                                                 <button class="btn btn-outline-danger btn-sm"
                                                     onclick="return confirm('Delete field?')">Del</button>

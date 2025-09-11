@@ -1,19 +1,27 @@
 @extends('admin.dashboard')
 @section('title', 'Audit Uploads')
-
+@php
+    $isAdmin = auth('web')->check();
+    $isAuditor = auth('auditor')->check();
+    $ns = $isAdmin ? 'admin.' : 'auditor.';
+@endphp
 @section('content')
-    <h4 class="mb-3">Audit Uploads — {{ $client->company_name }}</h4>
-    @php
-        $isAdmin = auth('web')->check();
-        $isAuditor = auth('auditor')->check();
-        $ns = $isAdmin ? 'admin.' : 'auditor.';
-    @endphp
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h4 class="mb-3">
+            <i class="bi bi-filetype-csv me-2"></i>
+            Audit Upload — {{ $client->company_name }}
+        </h4>
+        <a href="{{ route($ns . 'client.index', $client->id) }}" class="btn btn-outline-secondary btn-sm">
+            <i class="bi bi-arrow-left-short me-1"></i> Back
+        </a>
+    </div>
+
     <div class="row g-3">
         <div class="col-lg-5">
             <div class="card h-100">
                 <div class="card-header bg-white"><strong>Upload Audit CSV</strong></div>
                 <div class="card-body">
-                    <form class="row g-2" method="POST" action="{{ route($ns.'audit.upload.store', $client->id) }}"
+                    <form class="row g-2" method="POST" action="{{ route($ns . 'audit.upload.store', $client->id) }}"
                         enctype="multipart/form-data">
                         @csrf
                         <div class="col-12">
@@ -73,7 +81,7 @@
                                         <td class="small text-muted">{{ $f->created_at->format('d M Y H:i') }}</td>
                                         <td class="text-end">
                                             <form method="POST"
-                                                action="{{ route($ns.'audit.upload.destroy', [$client->id, $f->id]) }}">
+                                                action="{{ route($ns . 'audit.upload.destroy', [$client->id, $f->id]) }}">
                                                 @csrf @method('DELETE')
                                                 <button class="btn btn-outline-danger btn-sm"
                                                     onclick="return confirm('Delete this file & its rows?')">Delete</button>

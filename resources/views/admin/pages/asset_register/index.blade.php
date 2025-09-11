@@ -1,18 +1,17 @@
 @extends('admin.dashboard')
 @section('title', 'Asset Register')
-
+@php
+    $isAdmin = auth('web')->check();
+    $isAuditor = auth('auditor')->check();
+    $ns = $isAdmin ? 'admin.' : 'auditor.';
+@endphp
 @section('content')
     <div class="d-flex justify-content-between align-items-center mb-3">
         <h4 class="mb-0">
             <i class="bi bi-filetype-csv me-2"></i>
             Asset Register
         </h4>
-        @php
-            $isAdmin = auth('web')->check();
-            $isAuditor = auth('auditor')->check();
-            $ns = $isAdmin ? 'admin.' : 'auditor.';
-        @endphp
-        <a href="{{ route($ns.'client.index', $client->id) }}" class="btn btn-outline-secondary btn-sm">
+            <a href="{{ route($ns . 'client.index', $client->id) }}" class="btn btn-outline-secondary btn-sm">
             <i class="bi bi-arrow-left-short me-1"></i> Back
         </a>
     </div>
@@ -23,7 +22,7 @@
             <div class="card h-100">
                 <div class="card-header bg-white"><strong>Upload CSV (Register Header)</strong></div>
                 <div class="card-body">
-                    <form class="row g-3" method="POST" action="{{ route($ns.'register.store', $client->id) }}"
+                    <form class="row g-3" method="POST" action="{{ route($ns . 'register.store', $client->id) }}"
                         enctype="multipart/form-data">
                         @csrf
                         <div class="col-12">
@@ -86,7 +85,6 @@
                                                     : json_decode($f->headings, true);
                                                 $preview = collect($headings)->take(6)->implode(', ');
                                                 $extra = max(count($headings) - 6, 0);
-
                                             @endphp
                                             <span class="small">{{ $preview }}@if ($extra > 0)
                                                     <span class="text-muted"> +{{ $extra }} more</span>
@@ -96,14 +94,44 @@
                                         <td class="small">{{ $f->auditor?->name ?? '—' }}</td>
                                         <td class="small text-muted">{{ $f->created_at->format('d M Y H:i') }}</td>
                                         <td class="text-end">
-                                            <form method="POST"
-                                                action="{{ route($ns.'register.destroy', [$client->id, $f->id]) }}">
-                                                @csrf @method('DELETE')
-                                                <button class="btn btn-outline-danger btn-sm"
-                                                    onclick="return confirm('Delete this heading set?')">
-                                                    Delete
-                                                </button>
-                                            </form>
+                                            <div class="d-inline-flex flex-wrap gap-2 justify-content-end">
+
+                                                {{-- Import Register Data for this heading set --}}
+                                                {{-- <form class="d-inline" method="POST"
+                                                    action="{{ route($ns . 'register.rows.store', [$client->id, $f->id]) }}"
+                                                    enctype="multipart/form-data">
+                                                    @csrf
+                                                    <label class="btn btn-outline-primary btn-sm mb-0"
+                                                        title="Import data rows for this headings set">
+                                                        <i class="bi bi-table me-1"></i> Import Data CSV
+                                                        <input type="file" name="file" accept=".csv,text/csv"
+                                                            class="d-none" onchange="this.form.submit()">
+                                                    </label>
+                                                </form> --}}
+
+                                                {{-- Optional: purge data rows for this heading set --}}
+                                                {{-- <form class="d-inline" method="POST"
+                                                    action="{{ route($ns . 'register.rows.destroy', [$client->id, $f->id]) }}"
+                                                    onsubmit="return confirm('Delete ALL rows for this heading set?')">
+                                                    @csrf @method('DELETE')
+                                                    <button class="btn btn-outline-warning btn-sm"
+                                                        title="Delete all data rows for this headings set">
+                                                        <i class="bi bi-trash3 me-1"></i> Delete Rows
+                                                    </button>
+                                                </form> --}}
+
+                                                {{-- Existing: delete the headings set itself --}}
+                                                <form class="d-inline" method="POST"
+                                                    action="{{ route($ns . 'register.destroy', [$client->id, $f->id]) }}">
+                                                    @csrf @method('DELETE')
+                                                    <button class="btn btn-outline-danger btn-sm"
+                                                        onclick="return confirm('Delete this heading set?')"
+                                                        title="Delete this headings set">
+                                                        <i class="bi bi-x-circle me-1"></i> Delete Headings
+                                                    </button>
+                                                </form>
+
+                                            </div>
                                         </td>
                                     </tr>
                                     @empty
